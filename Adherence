@@ -1,0 +1,183 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu May 30 17:51:04 2019
+
+@author: prems
+"""
+
+#import IST
+import pandas as pd
+import numpy as np
+import pyarrow.parquet as pq
+#import pyarrow as pa
+import os
+
+####### Base Data ########
+run_date = pd.to_datetime('today') - pd.offsets.timedelta(days=3)
+#def Adherence_DashBoard(run_date,verbose = True):
+
+look_up = {'1': 'Jan', '2': 'Feb', '3': 'Mar', '4': 'Apr', '5': 'May', '6': 'Jun', '7': 'Jul', '8': 'Aug', '9': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dec'}
+#    rev_look_up = {'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04', 'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08', 'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'}
+#    F_DATE = str(pd.to_datetime(run_date).date().day).zfill(2)+'-'+str(pd.to_datetime(run_date).date().month).zfill(2)+'-'+str(pd.to_datetime(run_date).date().year)[-2:]
+fn_date = str(run_date.date().day).zfill(2) + look_up[str(run_date.date().month)] + str(run_date.date().year)[-2:]
+#verbose = False
+fn_date
+    
+this_brand = ['Aurelia', 'Joint Store']
+this_main_brand = [x for x in this_brand if x != 'Joint Store'][0]
+
+mid_week_adh = True
+
+if mid_week_adh:
+  this_adh_date = pd.to_datetime('today') - pd.offsets.timedelta(days=0)
+  adh_date = str(this_adh_date.date().day).zfill(2) + look_up[str(this_adh_date.date().month)] + str(this_adh_date.date().year)[-2:]
+  print(adh_date)
+  os.mkdir('../output/'+str(adh_date))
+
+prev_ist_dates = [x for x in os.listdir('../output/') if not x.endswith('.py')]
+prev_ist_dates = [str(pd.to_datetime(str(x[:2])+'-'+str(x[2:5])+'-'+str(x[5:]), dayfirst=True).date()) for x in prev_ist_dates]
+prev_ist_dates = sorted(prev_ist_dates)
+
+# Importing Files
+  
+f_product_master_sku = {'W': '../BaseFiles/W_SS19_Product_Master.csv',
+                        'Aurelia': '../BaseFiles/Aurelia_SS19_Product_Master.csv'}
+stock_mov_f = '../RegularInputFiles/Inward/Stock_Transfer_Movement.parquet'
+f_store_master = '../BaseFiles/Store master A+W (June 1st 19).xlsx'
+f_brand_store_mapper = '../BaseFiles/TCNS_Brand_Store_Mapper.csv'
+
+################## Reading Product Master File #################################
+
+f_product_master_sku = f_product_master_sku[this_main_brand]
+f_product_master_sku
+pm_raw = pd.read_csv(f_product_master_sku)
+pm = pm_raw.copy()
+pm = pm.loc[pm['AG'].notnull()].copy()
+pm['Size'] = pm['Size'].astype(str)
+pm['Material'] = pm['Style_Code'] + '-' + pm['Size'].astype(str)
+pm.reset_index(drop=True, inplace=True)
+pm.loc[(pm['Item Category']=='BOTTOMWEAR') & (pm['Product Group'].isin(['SLIM PANTS','PARALLEL PANTS','FLARED PANTS','TULIP PANTS'])),'Product Group']='PANTS'
+pm.shape
+
+################## Reading Stock Transfer #################################
+
+table = pq.read_table(stock_mov_f)
+stock_transfer_df = table.to_pandas()
+stock_transfer_df.loc[stock_transfer_df.Stock_Transfer_ID.isin(['TO19-008822'])]
+stock_transfer_df = stock_transfer_df[stock_transfer_df['Style_Code'].isin(pm['Style_Code'].unique())].reset_index(drop=True)
+print(stock_transfer_df.shape)
+print(stock_transfer_df.Shipment_Date.describe())
+
+stock_transfer_df.Shipment_Date.max()-stock_transfer_df.Shipment_Date.min()
+#(stock_transfer_df.Shipment_Date.unique()).isin()
+
+#################### Reading Store Master #################################
+
+dfst = pd.read_excel(f_store_master)
+dfst.columns
+dfst.rename(columns = {'Cluster':'Region','Store Name':'Store_Name'},inplace = True)
+#st_brand_map = pd.read_csv(f_brand_store_mapper)
+#dfst = dfst.merge(st_brand_map, on=['Store_Code'], how='left')
+dfst = dfst[dfst['Brand'].isin(this_brand)].reset_index(drop=True)
+dfst.shape
+
+##################### IST ADHERENCE #######################################
+
+tcns_pilot_ist_f = []
+
+for i in prev_ist_dates:
+  try:
+    temp_fn_date = (str(pd.to_datetime(str(i)).date().day).zfill(2) + look_up[str(pd.to_datetime(str(i)).date().month)] + str(pd.to_datetime(str(i)).date().year)[-2:])
+    tcns_pilot_ist_f += [x for x in os.listdir('../output/'+str(temp_fn_date)+'/'+str(this_main_brand)+'/') if x.endswith('.csv') and 'IST' in x.split('_') and 'Pilot' in x.split('_')]
+  except:
+    print(i)
+    continue
+
+tcns_pilot_ist_f
+
+stock_transfer_df[(stock_transfer_df['From_Location_ID'].isin(dfst['Store_Code'].unique()))
+                       & (stock_transfer_df['To_Location_ID'].isin(dfst['Store_Code'].unique()))].reset_index(drop=True)['Transfer_Qty'].sum()
+
+stock_transfer_df.shape
+
+act_ist = stock_transfer_df[(stock_transfer_df['From_Location_ID'].isin(dfst['Store_Code'].unique()))& (stock_transfer_df['To_Location_ID'].isin(dfst['Store_Code'].unique()))].reset_index(drop=True)
+act_ist.drop('Received_Date', axis=1, inplace=True)
+act_ist.rename(columns={'Stock_Transfer_ID':'TRANSFER ID', 'From_Location_ID':'Store_From','To_Location_ID':'Store_To', 'Shipment_Date':'Ship_Date', 'Transfer_Qty':'Ship_Qty'}, inplace=True)
+act_ist = act_ist[act_ist['Style_Code'].isin(pm['Style_Code'].unique())].reset_index(drop=True)
+act_ist['Material']=act_ist['Style_Code']+'-'+act_ist['Size']
+print(act_ist['Ship_Date'].describe())
+act_ist = act_ist[['Store_From', 'Store_To', 'Material', 'Ship_Date', 'Ship_Qty']].reset_index(drop=True)
+act_ist = act_ist[act_ist['Store_To']!='SML-RET'].reset_index(drop=True)
+act_ist = act_ist.groupby(['Store_From','Store_To','Material','Ship_Date'])['Ship_Qty'].sum().reset_index()
+act_ist['WC_IST_Date'] = np.nan
+next_i = ''
+
+for i in range(len(prev_ist_dates)):
+  if i < (len(prev_ist_dates) - 1):
+    next_i = prev_ist_dates[i+1]
+    print(next_i)
+  else:
+    continue
+  act_ist.loc[(act_ist['Ship_Date'] >= pd.to_datetime(str(prev_ist_dates[i]))) & (act_ist['Ship_Date'] < pd.to_datetime(str(next_i))), 'WC_IST_Date'] = prev_ist_dates[i]
+  print((act_ist['Ship_Date'] < pd.to_datetime(str(next_i))).sum(),(act_ist['Ship_Date'] < pd.to_datetime(str(next_i))).sum(),pd.to_datetime(str(next_i)))
+  
+act_ist['WC_IST_Date'] = pd.to_datetime(act_ist['WC_IST_Date'])
+act_ist = act_ist[(act_ist['Store_From'].isin(dfst['Store_Code'].unique().tolist())) & (act_ist['Store_To'].isin(dfst['Store_Code'].unique().tolist()))]
+act_ist = act_ist.groupby(['Store_From', 'Store_To', 'Material', 'Ship_Date', 'WC_IST_Date'])['Ship_Qty'].sum().reset_index()
+act_ist.shape
+
+################# Checks in IST Adh Output #############################
+
+act_ist.loc[act_ist['WC_IST_Date']==pd.to_datetime('2019-06-03')].Ship_Qty.sum()
+act_ist['Ship_Qty'].sum()
+act_ist.groupby('WC_IST_Date')['Ship_Qty'].sum()
+act_ist['WC_IST_Date'].unique()
+
+ist_adh = pd.DataFrame()
+next_i = ''
+
+for i in range(len(prev_ist_dates)):
+  if i < (len(prev_ist_dates) - 1):
+    next_i = prev_ist_dates[i+1]
+  else:
+    continue
+  print(prev_ist_dates[i])
+  try:
+    temp_fn_date = (str(pd.to_datetime(str(prev_ist_dates[i])).date().day).zfill(2) + look_up[str(pd.to_datetime(str(prev_ist_dates[i])).date().month)] + str(pd.to_datetime(str(prev_ist_dates[i])).date().year)[-2:])
+    print(str(temp_fn_date)+'/'+str(this_main_brand)+'/'+[x for x in tcns_pilot_ist_f if x.strip('.csv')[-7:] == temp_fn_date][0])
+  except:
+    print('No IST for', prev_ist_dates[i])
+    continue
+  f= pd.read_csv('../output/'+str(temp_fn_date)+'/'+str(this_main_brand)+'/'+[x for x in tcns_pilot_ist_f if x.strip('.csv')[-7:] == temp_fn_date][0])
+  f.rename(columns={'Style code':'Style_Code', 'Qty':'WC_IST_Qty'}, inplace=True)
+  f['Style_Code'] = f['Style_Code'].str.upper()
+  f['Material'] = f['Style_Code'] + '-' + f['Size'].astype(str)
+  f['WC_IST_Date'] = pd.to_datetime(f['WC_IST_Date'], dayfirst=True)
+  f = f.groupby(['Store_From', 'Store_To', 'Material', 'WC_IST_Date'])['WC_IST_Qty'].sum().reset_index()
+  f = f.merge(act_ist.groupby(['Store_From', 'Store_To', 'Material', 'WC_IST_Date']).agg({'Ship_Date':'min', 'Ship_Qty':'sum'}).reset_index(),
+              on=['Store_From', 'Store_To', 'Material', 'WC_IST_Date'], how='left').drop_duplicates().reset_index(drop=True)
+  if ist_adh.empty:
+    ist_adh = f.copy()
+  else:
+    ist_adh = pd.concat([ist_adh, f], ignore_index=True)
+    
+ist_adh = ist_adh.merge(dfst[['Store_Code', 'Store_Name', 'Region', 'Zone']].drop_duplicates().rename(columns={'Store_Code':'Store_From', 'Store_Name':'Store_Name_From'}),
+             on=['Store_From'], how='inner').drop_duplicates().reset_index(drop=True)
+
+ist_adh = ist_adh.merge(dfst[['Store_Code', 'Store_Name']].drop_duplicates().rename(columns={'Store_Code':'Store_To', 'Store_Name':'Store_Name_To'}),
+             on=['Store_To'], how='inner').drop_duplicates().reset_index(drop=True)
+
+
+ist_adh = ist_adh.merge(pm[['Product Group', 'AG', 'Story', 'Material']].drop_duplicates(),
+             on=['Material'], how='left').drop_duplicates().reset_index(drop=True)
+
+ist_adh = ist_adh[['Zone','Region', 'Store_From', 'Store_Name_From', 'Store_To', 'Store_Name_To', 'Product Group', 'AG', 'Story',
+       'Material', 'WC_IST_Date', 'WC_IST_Qty', 'Ship_Date', 'Ship_Qty']]
+
+ist_adh.shape
+
+act_ist.loc[act_ist['WC_IST_Date']==pd.to_datetime('2019-06-03')].Ship_Qty.sum()
+
+ist_adh.groupby('Ship_Date')['Ship_Qty'].sum()
+ist_adh.isna().sum()
+ist_adh.to_excel('../'+this_brand[0]+'_IST_Adherence_'+str(this_adh_date.date())+'.xlsx', index=False)
